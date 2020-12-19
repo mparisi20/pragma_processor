@@ -50,9 +50,17 @@ def parse_reg(str):
             return reg
     raise ValueError("Failed to parse register argument (can be r0...r31 or f0...f31)")
 
-pragmas = []
+class RegswapTask:
+    def __init__(self, start, end, regA, regB):
+        self.start = start # .text section byte offset 
+        self.end = end     # .text section byte offset
+        self.regA = regA
+        self.regB = regB
+        
+
+regswap_tasks = []
 with open(args.source, "r") as src, tempfile.NamedTemporaryFile(mode="w") as proc_src:
-    regswap_pattern = re.compile("[ \t]*#pragma[ \t]+regswap")
+    regswap_pattern = re.compile("[ \t]*#pragma[ \t]+regswap[ \t]+")
     for line in src:
         if regswap_pattern.match(line):
             if args.fix_regswaps:
@@ -68,24 +76,51 @@ with open(args.source, "r") as src, tempfile.NamedTemporaryFile(mode="w") as pro
                     raise ValueError("Invalid start, end, or start_file arguments (should have 4 byte aligment)")
                 if not (start >= start_file and end > start):
                     raise ValueError("Invalid start, end, or start_file arguments (end must be > start, and start >= start_file)")
-                pragmas.append((start-start_file, end-start_file, regA, regB))
+                regswap_tasks.append(RegswapTask(start-start_file, end-start_file, regA, regB))
         else:
             proc_src.write(line)
 
     subprocess.run(" ".join([args.cc, args.cflags, "-o", args.output, proc_src.name]))
 
 instrs = []
+TEXT_INDEX = 1 # NOTE: assumes that mwcceppc always places the .text section header at index 1
+SHDR_32_SIZE = 40 # size of an Elf32_Shdr object
 
-
-
-if args.fix_regswaps and len(pragmas) != 0:
+if args.fix_regswaps and len(regswap_tasks) != 0:
     with open(args.output, "rb") as f:
+        if f.read(7) != b'\x7FELF\x01\x02\x01':
+            raise ValueError("compiler output is not an current version ELF file for a 32-bit big endian architecture")
+        f.seek(0x20)
+        e_shoff = int.from_bytes(f.read(4), byteorder='big')
+        f.seek(0x30)
+        e_shnum = int.from_bytes(f.read(2), byteorder='big')
+        if e_shoff == 0 or e_shnum < 2:
+            raise ValueError("ELF file must contain at least two sections")
         
-
-# TODO: get .text size
-
-for i in range(text_size / 4):
-    instrs.append(PPCInstr(int.from_bytes(f.read(4), byteorder='big')))
+        # get .text section sh_offset and sh_size members
+        f.seek(e_shoff + TEXT_INDEX*SHDR_32_SIZE + 0x10)
+        text_offset = int.from_bytes(f.read(4), byteorder='big')
+        text_size = int.from_bytes(f.read(4), byteorder='big')
+        
+        # read .text section contents into buffer
+        f.seek(text_offset)
+        for i in range(text_size / 4):
+            instrs.append(PPCInstr(int.from_bytes(f.read(4), byteorder='big')))
+        
+        # perform regswap tasks
+        for task in regswap_tasks:
+            if task.end > text_size:
+                raise ValueError("End address " + (task.end + start_file) + " is past the end of the ELF file's .text section")
+            for i in range(task.start // 4, task.end // 4):
+                instrs[i].swap_registers(task.regA, task.regB)
+    
+    # write patched .text section back to the ELF
+    with open(args.output, "rb+") as f:
+        f.seek(text_offset)
+        for instr in instrs:
+            f.write(instr.v.to_bytes(4, byteorder='big'))
+    
+    
 
 
 """
@@ -107,7 +142,7 @@ if -fix-regswaps and len(regswap task list) != 0:
     parse as ELF (optional?)
     get .text section size (unpack big endian int), load .text section into buffer
     for each regswap task
-        for each instruction (unpacked as big endian ints) in (start, end] 
+        for each instruction (unpacked as big endian ints) in [start, end) 
             parse instruction opcode and use it to locate register fields
             change all regA -> regB and regB -> regA from left to right?
             
@@ -237,19 +272,19 @@ misc_opcode_map = {
 
 class PPCInstr:
 
-    instr_size = 32
-    reg_field_size = 5
+    INSTR_SIZE = 32
+    REG_FIELD_SIZE = 5
 
     def __init__(self, val):
         self.v = val
     
     def get_field(self, left, right):
-        return (self.v >> (self.instr_size - right - 1)) & ((1 << (right - left + 1)) - 1)
+        return (self.v >> (self.INSTR_SIZE - right - 1)) & ((1 << (right - left + 1)) - 1)
     
     def set_field(self, left, right, val):
         width = right - left + 1
         mask = (1 << width) - 1
-        shift = self.instr_size - width - left
+        shift = self.INSTR_SIZE - width - left
         self.v = self.v & ~(mask << shift) | ((val & mask) << shift)
     
     def get_opcode(self):
@@ -288,7 +323,7 @@ class PPCInstr:
         if reg_fields is None:
             return
         for left in reg_fields:
-            right = left + self.reg_field_size - 1
+            right = left + self.REG_FIELD_SIZE - 1
             currReg = self.get_field(left, right)
             if currReg == regA:
                 self.set_field(left, right, regB)
