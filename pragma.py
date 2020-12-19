@@ -47,11 +47,11 @@ op31_map = {
 
              frozenset([26, 954, 922, 824, 597, 725]): (6, 11),
 
-             frozenset([19, 83, 339, 371, 144, 146, 467, 595, 210]): (6),
+             frozenset([19, 83, 339, 371, 144, 146, 467, 595, 210]): (6,),
 
              frozenset([659, 242]): (6, 16),
 
-             frozenset([306]): (16)
+             frozenset([306]): (16,)
              }
            }
 
@@ -72,7 +72,7 @@ op63_map = {
              {
              frozenset([14, 15, 12, 264, 72, 136, 40]): (6, 16),
              frozenset([32, 0]): (11, 16),
-             frozenset([583, 711]): (6)
+             frozenset([583, 711]): (6,)
              }
            }
 
@@ -143,7 +143,7 @@ misc_opcode_map = {
                      50, 51, 48, 49, 54, 55, 52, 53, 56, 57, 
                      60, 61]): (6, 11),
 
-                    frozenset([11, 10, 3]): (11),
+                    frozenset([11, 10, 3]): (11,),
 
                     frozenset([23]): (6, 11, 16)
                     }
@@ -194,11 +194,13 @@ class PPCInstr:
         elif opcode == 4:
             return self.search_opcode_maps(ext_opcode, op4_map, op4_mask6_map, op4_mask5_map)
         else:
-            return self.search_opcode_maps(ext_opcode, misc_opcode_map)
+            return self.search_opcode_maps(opcode, misc_opcode_map)
     
     # edit the PPC instruction to swap the registers
     def swap_registers(self, regA, regB):
+        DEBUG_v = hex(self.v)
         reg_fields = self.get_reg_fields()
+        print(str(reg_fields) + ", " + DEBUG_v)
         if reg_fields is None:
             return
         for left in reg_fields:
@@ -238,8 +240,7 @@ class RegswapTask:
         self.regB = regB
 
 regswap_tasks = []
-#temp_name = os.path.dirname(args.source) + "/TMPFILE_" + os.path.basename(args.source)
-with open(args.source, "r") as src: # ,open(temp_name, mode="w", newline="\r\n") as proc_src
+with open(args.source, "r") as src:
     regswap_pattern = re.compile("[ \t]*#pragma[ \t]+regswap[ \t]+")
     for line in src:
         if regswap_pattern.match(line):
@@ -281,7 +282,7 @@ if args.fix_regswaps and len(regswap_tasks) != 0:
         
         # read .text section contents into buffer
         f.seek(text_offset)
-        for i in range(text_size / 4):
+        for i in range(text_size // 4):
             instrs.append(PPCInstr(int.from_bytes(f.read(4), byteorder='big')))
         
         # perform regswap tasks
