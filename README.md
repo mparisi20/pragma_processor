@@ -24,9 +24,9 @@ where,
 
 
 
-Then, invoke the pragma processor with the `-fix-regswaps` option:
+Then, invoke the pragma processor:
 ```
-python3 pragma.py [-h] [-fix-regswaps] cc cflags output source
+python3 pragma.py [-h] cc cflags output source
 ```
 
 

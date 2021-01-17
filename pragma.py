@@ -209,8 +209,6 @@ parser.add_argument("output",
                     help="path to the outputted object file")
 parser.add_argument("source", 
                     help="path to the C/C++ source file")
-parser.add_argument("-fix-regswaps", 
-                    help="execute #pragma regswap", action="store_true")
 args = parser.parse_args()
 
 def parse_reg(str):
@@ -227,32 +225,51 @@ class RegswapTask:
         self.regA = regA
         self.regB = regB
 
+class IswapTask:
+    def __init__(self, src, dst):
+        self.src = src # .text section byte offset
+        self.dst = dst # .text section byte offset
+
 regswap_tasks = []
+iswap_tasks = []
 with open(args.source, "r") as src:
     regswap_pattern = re.compile("[ \t]*#pragma[ \t]+regswap[ \t]+")
+    iswap_pattern = re.compile("[ \t]*#pragma[ \t]+iswap[ \t]+")
     for line in src:
         if regswap_pattern.match(line):
-            if args.fix_regswaps:
-                params = line.split()[2:]
-                if len(params) != 5:
-                    raise ValueError("ERROR: " + len(params) + " arguments passed to #pragma regswap (expected 5)")
-                start = int(params[0], base=16)
-                end = int(params[1], base=16)
-                regA = parse_reg(params[2])
-                regB = parse_reg(params[3])
-                start_file = int(params[4], base=16)
-                if not (start % 4 == 0 and end % 4 == 0 and start_file % 4 == 0):
-                    raise ValueError("Invalid start, end, or start_file arguments (should have 4 byte aligment)")
-                if not (start >= start_file and end > start):
-                    raise ValueError("Invalid start, end, or start_file arguments (end must be > start, and start >= start_file)")
-                regswap_tasks.append(RegswapTask(start-start_file, end-start_file, regA, regB))
+            params = line.split()[2:]
+            if len(params) != 5:
+                raise ValueError("ERROR: " + len(params) + " arguments passed to #pragma regswap (expected 5)")
+            start = int(params[0], base=16)
+            end = int(params[1], base=16)
+            regA = parse_reg(params[2])
+            regB = parse_reg(params[3])
+            start_file = int(params[4], base=16)
+            if not (start % 4 == 0 and end % 4 == 0 and start_file % 4 == 0):
+                raise ValueError("Invalid start, end, or start_file arguments (should have 4 byte aligment)")
+            if not (start >= start_file and end > start):
+                raise ValueError("Invalid start, end, or start_file arguments (end must be > start, and start >= start_file)")
+            regswap_tasks.append(RegswapTask(start-start_file, end-start_file, regA, regB))
+        elif iswap_pattern.match(line):
+            params = line.split()[2:]
+            if len(params) != 3:
+                raise ValueError("ERROR: " + len(params) + " arguments passed to #pragma iswap (expected 3)")
+            src = int(params[0], base=16)
+            dst = int(params[1], base=16)
+            start_file = int(params[2], base=16)
+            if not (src % 4 == 0 and dst % 4 == 0 and start_file % 4 == 0):
+                raise ValueError("Invalid src, dst, or start_file arguments (should have 4 byte aligment)")
+            if not (src >= start_file and dst > src):
+                raise ValueError("Invalid src, dst, or start_file arguments (dst must be > src, and src >= start_file)")
+            iswap_tasks.append(IswapTask(src-start_file, dst-start_file))
+            
     subprocess.run([*args.cc.strip().split(' '), *args.cflags.split(' '), "-o", args.output, args.source])
 
 instrs = []
 TEXT_INDEX = 1 # NOTE: assumes that mwcceppc always places the .text section header at index 1
 SHDR_32_SIZE = 40 # size of an Elf32_Shdr object
 
-if args.fix_regswaps and len(regswap_tasks) != 0:
+if regswap_tasks or iswap_tasks:
     with open(args.output, "rb") as f:
         if f.read(7) != b'\x7FELF\x01\x02\x01':
             raise ValueError("compiler output is not an current version ELF file for a 32-bit big endian architecture")
@@ -279,6 +296,12 @@ if args.fix_regswaps and len(regswap_tasks) != 0:
                 raise ValueError("End address " + (task.end + start_file) + " is past the end of the ELF file's .text section")
             for i in range(task.start // 4, task.end // 4):
                 instrs[i].swap_registers(task.regA, task.regB)
+        
+        # perform iswap tasks
+        for task in iswap_tasks:
+            if task.dst > text_size:
+                raise ValueError("End address " + (task.dst + start_file) + " is past the end of the ELF file's .text section")
+            instrs[task.src], instrs[task.dst] = instrs[task.dst], instrs[task.src]
     
     # write patched .text section back to the ELF
     with open(args.output, "rb+") as f:
