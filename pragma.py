@@ -186,9 +186,9 @@ class PPCInstr:
     
     # edit the PPC instruction to swap the registers
     def swap_registers(self, regA, regB):
-        # DEBUG_v = hex(self.v)
+        if regA >= 32: regA -= 32
+        if regB >= 32: regB -= 32
         reg_fields = self.get_reg_fields()
-        # print(str(reg_fields) + ", " + DEBUG_v)
         if reg_fields is None:
             return
         for left in reg_fields:
@@ -215,7 +215,7 @@ def parse_reg(str):
     if str[0] == 'r' or str[0] == 'f':
         reg = int(str[1:])
         if reg >= 0 and reg <= 31:
-            return reg
+            return reg if str[0] == 'r' else reg + 32
     raise ValueError("Failed to parse register argument (can be r0...r31 or f0...f31)")
 
 class RegswapTask:
