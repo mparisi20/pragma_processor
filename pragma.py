@@ -11,8 +11,7 @@
 # regB: register to swap (r0-r31 or f0-f31)
 # startFile: absolute address of the first function provided by this file (hex)
 
-# TODO: add support for an instruction swap pragma
-# TODO: add "#pragma startaddr <hex-addr>" to avoid rewriting the start address in each regswap pragma?
+#pragma iswap addrA addrB startFile
 
 import os
 import sys
@@ -189,9 +188,6 @@ class PPCInstr:
         else:
             return self.search_opcode_maps(opcode, misc_opcode_map)
     
-    # TODO: need to know bit positions of floating pt registers, since some instructions
-    # use both kinds
-
     def uses_float_regs(self):
         op = self.get_opcode()
         ext_op = self.get_ext_opcode()
