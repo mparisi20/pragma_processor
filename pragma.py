@@ -138,6 +138,11 @@ misc_opcode_map = {
                     }
                   }
 
+class FloatInfo:
+    def __init__(self, is_float, int_regs):
+        self.is_float = is_float
+        self.int_regs = int_regs
+
 class PPCInstr:
 
     INSTR_SIZE = 32
@@ -184,20 +189,36 @@ class PPCInstr:
         else:
             return self.search_opcode_maps(opcode, misc_opcode_map)
     
+    # TODO: need to know bit positions of floating pt registers, since some instructions
+    # use both kinds
+
+    def uses_float_regs(self):
+        op = self.get_opcode()
+        ext_op = self.get_ext_opcode()
+        if op in {48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 60, 61}:
+            return FloatInfo(True, (11,))
+        elif (op == 4 and ext_op & 0x3F in {6, 7, 38, 39}) or (op == 31 and ext_op in {535, 567, 599, 631, 663, 695, 727, 759, 983}):
+            return FloatInfo(True, (11, 16))
+        elif op in {4, 59, 63}:
+            return FloatInfo(True, ())
+        return FloatInfo(False, ())
+        
     # edit the PPC instruction to swap the registers
     def swap_registers(self, regA, regB):
-        if regA >= 32: regA -= 32
-        if regB >= 32: regB -= 32
+        info = self.uses_float_regs()
         reg_fields = self.get_reg_fields()
-        if reg_fields is None:
+        if not reg_fields:
             return
         for left in reg_fields:
             right = left + self.REG_FIELD_SIZE - 1
             currReg = self.get_field(left, right)
-            if currReg == regA:
-                self.set_field(left, right, regB)
-            elif currReg == regB:
-                self.set_field(left, right, regA)
+            # since r0-r31 occupy 0-31 and f0-31 occupy 32-63, 
+            # subtract 32 from regA/regB if the next register field is for a floating point register
+            dec = 0 if not info.is_float or left in info.int_regs else -32
+            if currReg == regA + dec:
+                self.set_field(left, right, regB + dec)
+            elif currReg == regB + dec:
+                self.set_field(left, right, regA + dec)
 
 
 parser = argparse.ArgumentParser()
@@ -239,7 +260,7 @@ with open(args.source, "r") as src:
         if regswap_pattern.match(line):
             params = line.split()[2:]
             if len(params) != 5:
-                raise ValueError("ERROR: " + len(params) + " arguments passed to #pragma regswap (expected 5)")
+                raise ValueError("ERROR: " + str(len(params)) + " arguments passed to #pragma regswap (expected 5)")
             start = int(params[0], base=16)
             end = int(params[1], base=16)
             regA = parse_reg(params[2])
@@ -253,7 +274,7 @@ with open(args.source, "r") as src:
         elif iswap_pattern.match(line):
             params = line.split()[2:]
             if len(params) != 3:
-                raise ValueError("ERROR: " + len(params) + " arguments passed to #pragma iswap (expected 3)")
+                raise ValueError("ERROR: " + str(len(params)) + " arguments passed to #pragma iswap (expected 3)")
             src = int(params[0], base=16)
             dst = int(params[1], base=16)
             start_file = int(params[2], base=16)
@@ -301,7 +322,9 @@ if regswap_tasks or iswap_tasks:
         for task in iswap_tasks:
             if task.dst > text_size:
                 raise ValueError("End address " + (task.dst + start_file) + " is past the end of the ELF file's .text section")
-            instrs[task.src], instrs[task.dst] = instrs[task.dst], instrs[task.src]
+            a = task.src // 4
+            b = task.dst // 4
+            instrs[a], instrs[b] = instrs[b], instrs[a]
     
     # write patched .text section back to the ELF
     with open(args.output, "rb+") as f:
